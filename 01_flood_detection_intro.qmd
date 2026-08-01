@@ -85,7 +85,7 @@ scenes
 In response, we received an object that is a multi-level list of lists. We
 can use the `View()` function to see its structure, which is quite complex.
 The `lapply()` function will be useful for us, as it can iterate through
-each element of the list and apply the appropriate function.
+each element of the list and apply the same function.
 
 We have found two scenes that meet our criteria. Let’s now select the spectral
 bands that will be useful for our analysis:
@@ -123,7 +123,7 @@ urls = lapply(scenes$features, assets_url, asset_names = bands)
 
 We received two lists, each consisting of 6 URLs to images. Using `sapply()`
 (returns a character vector directly instead of lists) and referring to the
-`id` argument, we can assign scene names to the `urls`.
+`id` attribute, we can assign scene names to the `urls`.
 
 ```{r}
 # assign scene names to the lists
@@ -180,8 +180,8 @@ From the @tbl-sentinel table, we can see that the spectral bands have various
 resolutions, which is problematic because we cannot overlay them (they have
 different numbers of columns and rows). The solution is to bring them to the
 same resolution. We will reduce the resolution from 10 m to 20 m (downsample)
-using the `aggregate()` function. Let's load the these four rasters (blue,
-green, red, nir bands) as temporary objects.
+using the `aggregate()` function. Let's load these four rasters (blue, green,
+red, NIR bands) as temporary objects.
 
 ```{r}
 # read R, G, B and NIR bands (10 m)
@@ -189,7 +189,8 @@ r1_tmp = rast(urls[[2]][1:4], win = bbox)
 r2_tmp = rast(urls[[1]][1:4], win = bbox)
 ```
 
-Let's downsample them using a factor of 2 and the averaging function.
+Let's downsample them by a factor of two, using the mean as the aggregation
+function.
 
 ```{r}
 #| output: false
@@ -224,7 +225,7 @@ names(r_pre) = band_names
 names(r_post) = band_names
 ```
 
-The last step is to remove reflectance values that exceed the range of 0 to 1.
+The last step is to handle reflectance values that exceed the range of 0 to 1.
 These are most often caused by atmospheric correction artifacts, sensor noise,
 measurement errors or outliers. There are several ways to do this, but the most
 commonly used method is the `clamp()` function, which allows us to remove values
@@ -237,6 +238,13 @@ on the map without data.
 r_pre = clamp(r_pre, lower = 0, upper = 1, values = TRUE)
 r_post = clamp(r_post, lower = 0, upper = 1, values = TRUE)
 ```
+
+::: {.callout-note appearance="simple"}
+Satellite data is typically stored as integers and must be scaled to a
+floating-point range. For data from the Earth Search Catalog, scaling factors
+are stored in the raster metadata and are automatically applied upon loading.
+See the `scoff()` function.
+:::
 
 ## Data Visualization
 
@@ -294,8 +302,8 @@ Difference Water Index ([NDWI](https://doi.org/10.1080/01431169608948714))
 and Modified Normalized Difference Water Index ([MNDWI](https://doi.org/10.1080/01431160600589179))
 being the most commonly used.
 
-Let's try to calculate the MNDWI, which uses the green and short-wave infrared
-(SWIR) bands. The formula is as follows:
+Let's calculate the MNDWI, which uses the green and short-wave infrared (SWIR)
+bands. The formula is as follows:
 
 $$
 \text{MNDWI} = \frac{\text{Green} - \text{SWIR}}{\text{Green} + \text{SWIR}}
@@ -336,14 +344,18 @@ plot(mndwi_post, range = c(-1, 1))
 ## Change Detection
 
 To determine the extent of the flood, we need to calculate the difference
-between the current and initial state. Next, choose a specific threshold
-value that will indicate the presence of water.
+between the current and initial state ($\text{MNDWI}_{\text{post}} - \text{MNDWI}_{\text{pre}}$).
+Next, choose a specific threshold value that will indicate the presence of water.
+The threshold value is selected empirically to minimize false positives
+(e.g., shadows, wet soil or seasonal changes in vegetation), because spectral
+characteristics can vary depending on weather conditions and sensor calibration.
+There is no universal threshold that would work everywhere.
 
 ```{r}
-# difference between the terms
+# change in MNDWI between acquisitions
 mndwi_diff = mndwi_post - mndwi_pre
 
-# thresholding (returns TRUE if the condition is met)
+# thresholding (TRUE if the condition is met)
 water_mask = mndwi_diff > 0.4
 ```
 
@@ -352,7 +364,7 @@ plot(water_mask, col = c("white", "blue"), main = "Water Mask")
 ```
 
 After creating a mask with the flood extent, we can calculate its area using
-the `expanse()` function. It is important to set the `byBalue` argument to
+the `expanse()` function. It is important to set the `byValue` argument to
 `TRUE` to return exact raster values (in the below table, value 1 means `TRUE`,
 0 means `FALSE`) and return the result in $km^2$.
 
@@ -373,6 +385,7 @@ compression.
 ```{r}
 #| eval: false
 
+# save the results to disk
 writeRaster(water_mask, "water_mask.tif", datatype = "INT1U")
 ```
 
