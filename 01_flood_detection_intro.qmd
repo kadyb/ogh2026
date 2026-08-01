@@ -241,7 +241,7 @@ r_post = clamp(r_post, lower = 0, upper = 1, values = TRUE)
 
 ::: {.callout-note appearance="simple"}
 Satellite data is typically stored as integers and must be scaled to a
-floating-point range. For data from the Earth Search Catalog, scaling factors
+floating-point range. For data from the Earth Search catalog, scaling factors
 are stored in the raster metadata and are automatically applied upon loading.
 See the `scoff()` function.
 :::
