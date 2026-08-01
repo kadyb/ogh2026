@@ -1,0 +1,391 @@
+---
+title: "Flood detection using satellite data"
+subtitle: "Introduction"
+author: "Krzysztof Dyba"
+format:
+  html:
+    toc: true
+    toc-title: " "
+    embed-resources: true
+    code-links:
+      - text: Repository
+        icon: github
+        href: https://github.com/kadyb/ogh2026
+---
+
+```{r}
+#| message: false
+
+library("terra") # 1.9.34
+library("rstac") # 1.0.1
+```
+
+# Introduction
+
+In September 2024, a [massive flood occurred](https://en.wikipedia.org/wiki/2024_Central_European_floods)
+in Central Europe caused by record rainfall from the Genoa low. It is estimated
+that the total losses could have exceeded 2 billion euros. For reference, take
+a look at these photos from Wikimedia:
+[Photo 1](https://upload.wikimedia.org/wikipedia/commons/0/0d/2024_Most_%C5%BCelazny_w_K%C5%82odzku_%287%29%2C_pow%C3%B3d%C5%BA.jpg),
+[Photo 2](https://upload.wikimedia.org/wikipedia/commons/9/91/Prudnik%2C_2024.09.15_62.jpg),
+[Photo 3](https://upload.wikimedia.org/wikipedia/commons/3/3a/2024_Pow%C3%B3d%C5%BA_w_K%C5%82odzku_%2816%29.jpg).
+
+The situation was observed by satellites in space. The data they collect can be
+used to monitor rainfall and floods in real time, which is very useful in crisis
+management. The purpose of this analysis is to determine the extent of flooding
+based on optical satellite imagery from [Sentinel-2](https://sentiwiki.copernicus.eu/web/sentinel-2).
+
+# Analysis
+
+## Data Acquisition
+
+We will obtain satellite data from [SpatioTemporal Asset Catalogs](https://stacspec.org/)
+(STAC) using the [rstac](https://github.com/brazil-data-cube/rstac) package.
+This data will be sourced from the [Earth Search catalog](https://element84.com/earth-search/),
+which is provided by Element 84.
+
+We must use the `stac()` function and specify the URL to connect to the data
+catalog.
+
+```{r}
+# define the STAC address
+stac_source = stac("https://earth-search.aws.element84.com/v1")
+stac_source
+```
+
+Next, we can search for the data we are interested in using the `stac_search()`
+function and the specified criteria. The data collection (`collection`), spatial
+extent (`bbox`), and temporal scope (`datetime`) will be important to us.
+This is the fundamental part of the query. Furthermore, we can select specific
+scenes based on specific attributes using the `ext_query()` function. In our
+case, let's select one scene before the flood (September 8th) and one during
+the flood (September 21st). Once we have the query ready, we can send it to the
+server with the `post_request()` function.
+
+::: {.callout-note appearance="simple"}
+It will be very helpful to use the pipe operator (`|>`) to combine several
+operations into one coherent sequence. We can use the keyboard shortcut
+`CTRL` + `SHIFT` + `M`, but this requires first select the
+`Use native pipe operator` option (`Code` > `Editing` tab) in RStudio.
+:::
+
+```{r}
+# query with parameters
+stac_source |>
+  stac_search(
+    collections = "sentinel-2-c1-l2a",
+    bbox = c(17.4, 50.7, 17.7, 50.9), # xmin, ymin, xmax, ymax (WGS84)
+    datetime = "2024-09-01T00:00:00Z/2024-09-30T00:00:00Z" # RFC 3339
+  ) |>
+  ext_query("datetime" %in% c("2024-09-08", "2024-09-21")) |>
+  post_request() -> scenes
+scenes
+```
+
+In response, we received an object that is a multi-level list of lists. We
+can use the `View()` function to see its structure, which is quite complex.
+The `lapply()` function will be useful for us, as it can iterate through
+each element of the list and apply the appropriate function.
+
+We have found two scenes that meet our criteria. Let’s now select the spectral
+bands that will be useful for our analysis:
+
+| Band  | Name                        | Wavelength (nm) | Spatial Resolution |
+|:-----:|:----------------------------|:---------------:|:------------------:|
+| B2    | Blue                        | 458-523         | 10 m               |
+| B3    | Green                       | 543-578         | 10 m               |
+| B4    | Red                         | 650-680         | 10 m               |
+| B8    | Near-Infrared (NIR)         | 785-899         | 10 m               |
+| B11   | Shortwave Infrared (SWIR 1) | 1565-1655       | 20 m               |
+| B12   | Shortwave Infrared (SWIR 2) | 2100-2280       | 20 m               |
+
+: Selected spectral bands from Sentinel-2. {#tbl-sentinel}
+
+We have two options for downloading data:
+
+- Download the entire file to the disk using the `assets_download()` function
+(from the `rstac` package).
+- Download a subset of data representing a specific area of the image. This is
+made possible by the [Cloud Optimized Geotiff](https://www.cogeo.org) (COG)
+format and [GDAL Virtual File Systems](https://gdal.org/en/stable/user/virtual_file_systems.html).
+
+Let's choose the second option, which requires providing a URL to access the
+data. We can use the `assets_url()` function for this and we can indicate the
+spectral bands that interest us using the `asset_names` argument. Importantly,
+we want the returned URLs to be split by scene (rather than returned as a single
+object), so we need to use `lapply()`.
+
+```{r}
+# get URLs for the images
+bands = c("red", "green", "blue", "nir", "swir16", "swir22")
+urls = lapply(scenes$features, assets_url, asset_names = bands)
+```
+
+We received two lists, each consisting of 6 URLs to images. Using `sapply()`
+(returns a character vector directly instead of lists) and referring to the
+`id` argument, we can assign scene names to the `urls`.
+
+```{r}
+# assign scene names to the lists
+names(urls) = sapply(scenes$features, "[[", "id")
+```
+
+The links are not sorted, which may cause errors related to the order of the
+bands. So let's sort them using the `sort()` function.
+
+```{r}
+# sort links alphabetically
+urls = lapply(urls, sort)
+```
+
+Finally, let's add the `/vsicurl/` prefix to each link to enable loading files
+using HTTP range requests. We will use the `paste0()` function, but we can also
+do this directly in `assets_url()` (set `append_gdalvsi` argument to `TRUE`).
+
+```{r}
+# add the "/vsicurl/" prefix
+urls = lapply(urls, \(x) paste0("/vsicurl/", x))
+```
+
+## Data Processing
+
+Let's define an area of interest that includes the flooded areas along the Nysa
+Kłodzka River. We need to define this area as a spatial extent (also known as a
+bounding box). The `ext()` function is used for this purpose. It requires four
+coordinates (`xmin`, `xmax`, `ymin`, `ymax`) in a specific coordinate system.
+We can check the coordinate system in the metadata or by using the `describe()`
+function on the file. Our data is in the UTM Zone 33N coordinate system
+(`EPSG:32633`).
+
+```{r}
+# define the spatial extent
+# (xmin, xmax, ymin, ymax)
+bbox = ext(c(669800, 689100, 5623100, 5641400))
+```
+
+The `rast()` function reads raster data. It requires the data source to be
+specified as the first argument. In our case, these will be files located in
+the cloud, and we will provide their addresses. In addition, as the `win`
+argument, we will specify the `bbox` object containing the area of interest.
+We will create two objects: `r_pre` containing images taken before the flood,
+and `r_post` containing images taken during the flood.
+
+```{r}
+# read SWIR1 and SWIR2 bands (20 m)
+r_pre = rast(urls[[2]][5:6], win = bbox)
+r_post = rast(urls[[1]][5:6], win = bbox)
+```
+
+From the @tbl-sentinel table, we can see that the spectral bands have various
+resolutions, which is problematic because we cannot overlay them (they have
+different numbers of columns and rows). The solution is to bring them to the
+same resolution. We will reduce the resolution from 10 m to 20 m (downsample)
+using the `aggregate()` function. Let's load the these four rasters (blue,
+green, red, nir bands) as temporary objects.
+
+```{r}
+# read R, G, B and NIR bands (10 m)
+r1_tmp = rast(urls[[2]][1:4], win = bbox)
+r2_tmp = rast(urls[[1]][1:4], win = bbox)
+```
+
+Let's downsample them using a factor of 2 and the averaging function.
+
+```{r}
+#| output: false
+
+# downsample rasters to 20 m
+r1_tmp = aggregate(r1_tmp, fact = 2, fun = "mean")
+r2_tmp = aggregate(r2_tmp, fact = 2, fun = "mean")
+```
+
+Given the same resolution, extent, and coordinate system, we can combine
+(overlay) all the rasters. Simply use the standard `c()` function.
+
+```{r}
+# combine rasters
+r_pre = c(r1_tmp, r_pre)
+r_post = c(r2_tmp, r_post)
+```
+
+::: {.callout-note appearance="simple"}
+Alternatively, instead of creating two separate raster objects, we could use
+the `SpatRasterDataset` class, which represents multidimensional objects (with
+time as the fourth dimension).
+:::
+
+For clarity, we can rename the layers (bands) from numbers to names by
+overwriting the `names()` attribute.
+
+```{r}
+# rename layers
+band_names = c("blue", "green", "red", "nir", "swir1", "swir2")
+names(r_pre) = band_names
+names(r_post) = band_names
+```
+
+The last step is to remove reflectance values that exceed the range of 0 to 1.
+These are most often caused by atmospheric correction artifacts, sensor noise,
+measurement errors or outliers. There are several ways to do this, but the most
+commonly used method is the `clamp()` function, which allows us to remove values
+that fall outside the defined range (`values = FALSE` argument) or to overwrite
+them (`values = TRUE` argument). Deleting values may result in many empty spaces
+on the map without data.
+
+```{r}
+# trim outliers
+r_pre = clamp(r_pre, lower = 0, upper = 1, values = TRUE)
+r_post = clamp(r_post, lower = 0, upper = 1, values = TRUE)
+```
+
+## Data Visualization
+
+We already have the data prepared, so let's see how it looks on the map. We can
+use the simple `plot()` function to visualize a single band, but in our case,
+a visual composition consisting of three images will be much more useful.
+The composition can represent natural colors (red, green, blue), but can also
+represent false colors, e.g. infrared bands (NIR, SWIR).
+
+The `plotRGB()` function can be used to create a three-band composition.
+We need to define the correct order of the raster layers (bands). It is also
+usually necessary to enhance the contrast, for example, by applying linear
+stretching (`stretch = "lin"` argument). Let's start by creating a composition
+using natural colors (red, green, blue).
+
+```{r}
+#| layout-ncol: 2
+#| fig-subcap:
+#|   - "Before the flood"
+#|   - "During the flood"
+
+# red, green, blue bands
+plotRGB(r_pre, r = 3, g = 2, b = 1, stretch = "lin")
+plotRGB(r_post, r = 3, g = 2, b = 1, stretch = "lin")
+```
+
+Now let's create a false color composition consisting of the SWIR2, NIR and red
+bands. Water almost completely absorbs near-infrared and short-wave infrared
+radiation, making flooded areas clearly visible as dark contrasting surfaces
+against a background of light-reflecting vegetation and soil.
+
+```{r}
+#| layout-ncol: 2
+#| fig-subcap:
+#|   - "Before the flood"
+#|   - "During the flood"
+
+# SWIR2, NIR, red bands
+plotRGB(r_pre, r = 6, g = 4, b = 3, stretch = "lin")
+plotRGB(r_post, r = 6, g = 4, b = 3, stretch = "lin")
+```
+
+## Spectral Index
+
+Different objects absorb and reflect light in different ways depending on the
+wavelength (a different value will be recorded in the green band and a different
+one in the near infrared band). On this basis, we can calculate various spectral
+indices; that is, by using appropriate ranges of the electromagnetic spectrum
+and mathematical formulas, we can study the properties of objects. The most
+common example of an index is the Normalized Difference Vegetation Index (NDVI),
+which uses the red and near-infrared bands to assess the condition of vegetation.
+
+Several indices have been developed for detecting water, with Normalized
+Difference Water Index ([NDWI](https://doi.org/10.1080/01431169608948714))
+and Modified Normalized Difference Water Index ([MNDWI](https://doi.org/10.1080/01431160600589179))
+being the most commonly used.
+
+Let's try to calculate the MNDWI, which uses the green and short-wave infrared
+(SWIR) bands. The formula is as follows:
+
+$$
+\text{MNDWI} = \frac{\text{Green} - \text{SWIR}}{\text{Green} + \text{SWIR}}
+$$
+
+We must define the above formula as a function.
+
+```{r}
+# define MNDWI (Xu, 2006)
+calculate_mndwi = function(green, swir) {
+  mndwi = (green - swir) / (green + swir)
+  names(mndwi) = "MNDWI"
+  return(mndwi)
+}
+```
+
+Then use this function for calculations by substituting the appropriate bands.
+
+```{r}
+# calculate MNDWI
+mndwi_post = calculate_mndwi(r_post["green"], r_post["swir1"])
+mndwi_pre = calculate_mndwi(r_pre["green"], r_pre["swir1"])
+```
+
+We can visualize the results on a map. The expected values for this index range
+from -1 to 1, with high values indicating water extent.
+
+```{r}
+#| layout-ncol: 2
+#| fig-subcap:
+#|   - "MNDWI (before the flood)"
+#|   - "MNDWI (during the flood)"
+
+plot(mndwi_pre, range = c(-1, 1))
+plot(mndwi_post, range = c(-1, 1))
+```
+
+## Change Detection
+
+To determine the extent of the flood, we need to calculate the difference
+between the current and initial state. Next, choose a specific threshold
+value that will indicate the presence of water.
+
+```{r}
+# difference between the terms
+mndwi_diff = mndwi_post - mndwi_pre
+
+# thresholding (returns TRUE if the condition is met)
+water_mask = mndwi_diff > 0.4
+```
+
+```{r}
+plot(water_mask, col = c("white", "blue"), main = "Water Mask")
+```
+
+After creating a mask with the flood extent, we can calculate its area using
+the `expanse()` function. It is important to set the `byBalue` argument to
+`TRUE` to return exact raster values (in the below table, value 1 means `TRUE`,
+0 means `FALSE`) and return the result in $km^2$.
+
+```{r}
+# calculate the area
+expanse(water_mask, unit = "km", byValue = TRUE, transform = FALSE)
+```
+
+In the studied area, approximately 43 $km^2$ was affected by the flood.
+
+## Export Results
+
+We can save the results to disk using the `writeRaster()` function, specifying
+the path and file format. Since we only have two values, we can set the datatype
+to 8-bit (`datatype = "INT1U"`). By default, the data is saved using LZW
+compression.
+
+```{r}
+#| eval: false
+
+writeRaster(water_mask, "water_mask.tif", datatype = "INT1U")
+```
+
+# Exercise
+
+1. Create an image composition consisting of the `swir2` (B12), `swir1` (B11)
+and `nir` (B08) bands. Compare the images from before and during the flood.
+2. Determine the area covered by the water based on the
+[Automated Water Extraction Index](https://doi.org/10.1016/j.rse.2013.08.029)
+(AWEI) and save the result to disk. How much area does the water cover?
+To calculate AWEI, use the following formula:
+
+$$
+\text{AWEI} = 4 \times (\text{Green} - \text{SWIR}_1) - (0.25 \times \text{NIR} + 2.75 \times \text{SWIR}_2)
+$$
+
