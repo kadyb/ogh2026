@@ -1,6 +1,6 @@
 ---
 title: "Flood detection using satellite data"
-subtitle: "Introduction"
+subtitle: "Part 1: Introduction"
 author: "Krzysztof Dyba"
 format:
   html:
@@ -387,6 +387,16 @@ compression.
 
 # save the results to disk
 writeRaster(water_mask, "water_mask.tif", datatype = "INT1U")
+```
+
+```{r}
+#| include: false
+
+# save rasters for the next part of the workshop
+if (!file.exists("data/r_pre.tif")) {
+  writeRaster(r_pre, "data/r_pre.tif")
+  writeRaster(r_post, "data/r_post.tif")
+}
 ```
 
 # Exercise
