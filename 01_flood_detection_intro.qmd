@@ -356,7 +356,7 @@ There is no universal threshold that would work everywhere.
 mndwi_diff = mndwi_post - mndwi_pre
 
 # thresholding (TRUE if the condition is met)
-water_mask = mndwi_diff > 0.4
+water_mask = mndwi_diff > 0.3
 ```
 
 ```{r}
@@ -373,7 +373,7 @@ the `expanse()` function. It is important to set the `byValue` argument to
 expanse(water_mask, unit = "km", byValue = TRUE, transform = FALSE)
 ```
 
-In the studied area, approximately 43 $km^2$ was affected by the flood.
+In the studied area, approximately 46.6 $km^2$ was affected by the flood.
 
 ## Export Results
 
