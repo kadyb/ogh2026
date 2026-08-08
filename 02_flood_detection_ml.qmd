@@ -1,0 +1,367 @@
+---
+title: "Flood detection using satellite data"
+subtitle: "Part 2: Machine learning"
+author: "Krzysztof Dyba"
+format:
+  html:
+    toc: true
+    toc-title: " "
+    embed-resources: true
+    code-links:
+      - text: Repository
+        icon: github
+        href: https://github.com/kadyb/ogh2026
+---
+
+```{r}
+#| message: false
+
+library("terra")      # 1.9.34
+library("rpart")      # 4.1.27
+library("rpart.plot") # 3.1.4
+```
+
+```{r}
+# randomness seed
+# for reproducibility of results
+set.seed(1) 
+```
+
+# Introduction
+
+In this part of the workshop, we will perform supervised classification to
+detect the extent of flooding using an approach based on machine learning and
+reference data. The trained model will be validated (to verify its accuracy)
+and interpreted (to understand how it makes classification decisions).
+Finally, we will make predictions for the entire area of interest.
+
+# Analysis
+
+## Data Loading
+
+We'll start by loading the `points.gpkg` vector data in Geopackage format,
+which is located in the `data` directory. The `vect()` function is used for
+this.
+
+```{r}
+# load vector data
+pts = vect("data/points.gpkg")
+pts
+```
+
+We loaded a file consisting of 520 points and a single attribute representing
+the land cover class (`class`). This attribute is character datatype, so we can
+convert it to a factor representing categories using the `as.factor()` function.
+
+```{r}
+# convert variable to factor
+pts$class = as.factor(pts$class)
+```
+
+We can retrieve unique classes by using the `levels()` function on this
+attribute.
+
+```{r}
+# show unique classes
+levels(pts$class)
+```
+
+We can also return the number of observations for an every category using
+the `table()` function.
+
+```{r}
+# occurrence table
+table(pts$class)
+```
+
+We can see that each class is represented by an equal number of observations.
+In other words, this dataset is balanced.
+
+Now let's load the raster data from the previous part of the workshop (the
+rasters must be saved to disk, otherwise an error will appear at this point).
+
+```{r}
+# load raster data
+r_pre = rast("data/r_pre.tif")
+r_post = rast("data/r_post.tif")
+```
+
+Let's create visualization of reference points using an RGB composition as the
+background. First, we need to call the `plotRGB()` function to create an RGB
+composition, and then the `plot()` function to add points to it (set argument
+`add` to `TRUE`). We also need to define an attribute from the vector layer
+based on which colors will be assigned.
+
+```{r}
+# visualization
+m = c(0, 0, 1.5, 0) # margins
+colors = c("gold", "red", "darkgreen", "blue")
+
+plotRGB(r_pre, r = 3, g = 2, b = 1, stretch = "lin",
+        main = "Reference points", mar = m)
+plot(pts, "class", col = colors, add = TRUE)
+```
+
+## Data Preparation
+
+Typically, machine learning algorithms require input data in the form of a
+matrix or a data frame. In supervised classification, a table consists of
+explanatory (independent) variables and a predicted (dependent) variable.
+In other words, the explanatory variables will represent the measured values,
+and the predicted variable will contain reference data (labels/categories).
+
+Based on the above, we need to get the band values for the reference points.
+To do this, we will use the `extract()` function. We need to specify the raster
+data as the first argument and the vector data as the second argument. We can
+omit the point IDs from the table (`ID = FALSE` argument). By default, a data
+frame will be returned as the result. Finally, we need to copy the `class`
+attribute from the vector layer to the created data frame.
+
+```{r}
+# extract raster values based on points
+df = extract(r_post, pts, ID = FALSE)
+
+# copy attribute to data frame
+df$class = pts$class
+```
+
+We can use the `View()` function to interactively view a data frame.
+
+```{r}
+#| eval: false
+
+View(df)
+```
+
+The fact is that model outputs need to be verified. Various approaches are
+used, such as holdout validation or cross-validation. In our case, we will
+choose holdout validation, which requires dividing the input dataset into
+two independent sets:
+
+- a training set, on which the model will be trained,
+- a test set, on which the model will be validated.
+
+It is generally assumed that the training set constitutes 70% to 80% of the
+observations, and the test set 20% to 30%, respectively.
+
+From a technical perspective, the procedure is as follows. We calculate
+the percentage of all observations that will constitute the training set,
+e.g., 70%. Next, we randomly draw indices from the data frame using the
+`sample()` function. Based on the drawn indices, we select the observations
+and save them as the training set. We then create the test set by subtracting
+those indices. 
+
+```{r}
+# divide into training and test sets
+n = round(0.7 * nrow(df))
+trainIndex = sample(nrow(df), size = n)
+train = df[trainIndex, ]
+test = df[-trainIndex, ]
+```
+
+## Model Training
+
+For modeling, we will use a simple decision tree, which relies on classification
+rules. The function is available in the `rpart` package under the same name.
+The function requires defining a formula. We need to specify what is the modeled
+variable and what are the explanatory variables. The tilde character indicates
+dependency, e.g. `Y` is dependent on `X1` and `X2`. The plus sign is used to
+combine subsequent variables. For instance:
+
+```r
+# Y depends on X1 and X2
+Y ~ X1 + X2
+```
+
+If a dataset contains multiple explanatory variables, we don't have to list
+them all. In that case, you can use a period to represent all variables except
+the dependent variable. Then the simpler form: `Y ~ .`
+
+In addition to the formula, we must also define a dataset (`data = train`) and
+a method. In this case, the method will be classification (`method = "class"`).
+We can also define the model's hyperparameters to improve classification
+results. To simplify the model, let's set the model complexity (`cp` parameter)
+from the default value of 0.01 to 0.05. In practice, this will result in a
+shallower decision tree (fewer splits).
+
+```{r}
+# train decision tree
+mdl_dt = rpart(class ~ ., data = train, method = "class",
+               control = rpart.control(cp = 0.05))
+```
+
+## Model Validation
+
+To evaluate the quality of a model, we need to use some kind of statistic
+(metric). For classification, the simplest metric is accuracy, which is
+calculated as follows:
+
+$$
+\text{Accuracy} = \frac{\text{TP} + \text{TN}}{\text{TP} + \text{TN} + \text{FP} + \text{FN}}
+$$
+
+Where:
+
+* **TP** – True Positives
+* **TN** – True Negatives
+* **FP** – False Positives
+* **FN** – False Negatives
+
+According to the formula, we need to sum the correct classifications and divide
+that sum by the total number of classifications.
+
+```{r}
+# define accuracy metric
+accuracy = function(actual, predicted) {
+  accuracy = sum(actual == predicted) / length(actual)
+  return(accuracy)
+}
+```
+
+Let's check how effective our trained model is using the test set. From the
+test set, we exclude the column containing the reference class and make
+predictions using the model. The `predict()` function is used for this.
+The order of the arguments is important. If we are making a prediction for
+a data frame, we specify the model as the first argument and the data frame
+as the second argument. In addition, we must define the type of prediction,
+which in this case will be `"class"`.
+
+```{r}
+# prediction for test set
+pred = predict(mdl_dt, test[, -7], type = "class")
+```
+
+This gives us a vector containing the predicted classes. In the created
+`accuracy()` function, we provide a vector with reference classes and a
+vector with predicted classes.
+
+```{r}
+# calculate accuracy
+accuracy(test$class, pred)
+```
+
+We achieved an accuracy of over 90%, which is a very good result. Next, we
+can examine the classification results in detail using a confusion matrix.
+This is a tabular summary showing which classes are misclassified by the model.
+The upper triangle in the table shows the False Positive (type I error)
+classifications, while the lower triangle shows the False Negative (type II error)
+classifications. Ideally, most values should be on the diagonal of the table,
+because they indicate correct classifications. This table can be created using
+the `table()` function.
+
+```{r}
+# confusion matrix
+table(Predicted = pred, Reference = test$class)
+```
+
+## Model Explanation
+
+In most cases, machine learning models are black box models, and it is unclear
+how they work. A decision tree, on the other hand, is a white box model, and
+we can understand the classification rules.
+
+```{r}
+# plot decision tree
+prp(mdl_dt)
+```
+
+From the figure above, we can see that two conditions are necessary for the
+model to classify water:
+
+1. Values in the SWIR2 band are less than 0.073.
+2. Values in the NIR band are less than 0.14.
+
+Let's plot these two conditions as dashed lines on a scatter plot of the
+original data.
+
+```{r}
+colors = c("gold", "red", "darkgreen", "blue")
+
+plot(df$nir, df$swir2, col = colors[df$class], pch = 19,
+     main = "Water detection",
+     xlab = "Near Infrared (NIR)", ylab = "Shortwave Infrared 2 (SWIR2)")
+abline(h = 0.073, v = 0.136, lty = 2, lwd = 2) # threshold values
+legend("topright", title = "Reference class", legend = levels(df$class),
+       col = colors, pch = 19)
+```
+
+## Final Map
+
+Let's make a prediction for the entire area. We will use the `predict()`
+function again, but this time for raster data rather than a data frame.
+In this case, we need to provide the raster data as the first argument
+to the function and the model as the second. We will set the prediction
+type again to classification. If there are missing values in the raster,
+it is a good idea to set the `na.rm` argument to `TRUE`.
+
+```{r}
+# prediction for the entire area
+pred_map = predict(r_post, mdl_dt, type = "class", na.rm = TRUE)
+```
+
+The prediction map has four classes (cropland, developed, forest, water). Let's
+convert these classes into a binary raster representing a flood extent mask.
+To do this, we need to use the `classify()` function to reclassify the values.
+Reclassification is performed based on a reclassification matrix consisting of
+two columns. The first column contains the old value, and the second column
+contains the new value. Let's set the water class to 1 and the other classes
+to 0.
+
+```{r}
+# reclassification matrix
+rcl_mat = c(
+  1, 0,  # cropland   -->  FALSE
+  2, 0,  # developed  -->  FALSE
+  3, 0,  # forest     -->  FALSE
+  4, 1   # water      -->  TRUE
+)
+rcl_mat = matrix(rcl_mat, ncol = 2, byrow = TRUE)
+```
+
+```{r}
+# reclassify raster values (binary mask)
+water_mask = classify(pred_map, rcl_mat)
+```
+
+On the map, we can see noise consisting of many individual cells in homogeneous
+areas (the "salt-and-pepper" effect). The reason for this is that classification
+is performed for each cell independently, without taking its local neighborhood
+into account. However, we can address this issue by smoothing the raster values
+using a modal filter. We can do this by using the `focal()` function, defining
+the size of the moving window (`w` argument), and specifying a function
+(`fun = "modal"`). The larger the window size, the smoother the values will be.
+
+```{r}
+# smooth raster values
+water_mask = focal(water_mask, w = 3, fun = "modal", expand = TRUE)
+```
+
+Let's compare the water extent predicted by the model with a false color
+composition (SWIR2, NIR and red bands).
+
+```{r}
+#| layout-ncol: 2
+#| fig-subcap:
+#|   - "Prediction"
+#|   - "False color composition"
+
+colors = c("white", "blue")
+plot(water_mask, col = colors, legend = FALSE, axes = FALSE, mar = 0)
+
+plotRGB(r_post, r = 6, g = 4, b = 3, stretch = "lin")
+```
+
+Finally, we can save the result to disk using the `writeRaster()` function.
+
+```{r}
+#| eval: false
+
+# save the results to disk
+writeRaster(water_mask, "water_mask_ml.tif", datatype = "INT1U")
+```
+
+# Exercise
+
+1. Train and test an support vector machine (SVM) model from the e1071 package
+(see `?svm`). Present the classification result on a map.
+
