@@ -246,7 +246,11 @@ can examine the classification results in detail using a confusion matrix.
 This is a tabular summary showing which classes are misclassified by the model.
 Ideally, most values should be on the diagonal of the table, because they
 indicate correct classifications. Any values outside of the diagonal represent
-misclassifications. This table can be created using the `table()` function.
+misclassifications.
+
+The confusion matrix can be created using the `table()` function. As arguments,
+we need to define a vector with class predictions and a vector with actual
+classes.
 
 ```{r}
 # confusion matrix
