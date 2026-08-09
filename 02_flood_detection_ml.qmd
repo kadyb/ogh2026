@@ -39,7 +39,7 @@ Finally, we will make predictions for the entire area of interest.
 
 ## Data Loading
 
-We'll start by loading the `points.gpkg` vector data in Geopackage format,
+We'll start by loading the `points.gpkg` vector data in geopackage format,
 which is located in the `data` directory. The `vect()` function is used for
 this.
 
@@ -49,9 +49,10 @@ pts = vect("data/points.gpkg")
 pts
 ```
 
-We loaded a file consisting of 520 points and a single attribute representing
-the land cover class (`class`). This attribute is character datatype, so we can
-convert it to a factor representing categories using the `as.factor()` function.
+We loaded a file containing 520 points and a single attribute representing
+the land cover class (`class`). This attribute is of character datatype, so
+we can convert it to a factor representing categories using the `as.factor()`
+function.
 
 ```{r}
 # convert variable to factor
@@ -66,8 +67,8 @@ attribute.
 levels(pts$class)
 ```
 
-We can also return the number of observations for an every category using
-the `table()` function.
+We can also return the number of observations for each category using the
+`table()` function.
 
 ```{r}
 # occurrence table
@@ -86,7 +87,7 @@ r_pre = rast("data/r_pre.tif")
 r_post = rast("data/r_post.tif")
 ```
 
-Let's create visualization of reference points using an RGB composition as the
+Let's create a visualization of reference points using an RGB composition as the
 background. First, we need to call the `plotRGB()` function to create an RGB
 composition, and then the `plot()` function to add points to it (set argument
 `add` to `TRUE`). We also need to define an attribute from the vector layer
@@ -148,8 +149,8 @@ From a technical perspective, the procedure is as follows. We calculate
 the percentage of all observations that will constitute the training set,
 e.g., 70%. Next, we randomly draw indices from the data frame using the
 `sample()` function. Based on the drawn indices, we select the observations
-and save them as the training set. We then create the test set by subtracting
-those indices. 
+and save them as the training set. We then create the test set by excluding
+those indices.
 
 ```{r}
 # divide into training and test sets
@@ -166,7 +167,7 @@ rules. The function is available in the `rpart` package under the same name.
 The function requires defining a formula. We need to specify what is the modeled
 variable and what are the explanatory variables. The tilde character indicates
 dependency, e.g. `Y` is dependent on `X1` and `X2`. The plus sign is used to
-combine subsequent variables. For instance:
+combine multiple variables. For instance:
 
 ```r
 # Y depends on X1 and X2
@@ -174,7 +175,7 @@ Y ~ X1 + X2
 ```
 
 If a dataset contains multiple explanatory variables, we don't have to list
-them all. In that case, you can use a period to represent all variables except
+them all. In that case, we can use a period to represent all variables except
 the dependent variable. Then the simpler form: `Y ~ .`
 
 In addition to the formula, we must also define a dataset (`data = train`) and
@@ -231,7 +232,7 @@ which in this case will be `"class"`.
 pred = predict(mdl_dt, test[, -7], type = "class")
 ```
 
-This gives us a vector containing the predicted classes. In the created
+This returns a vector containing the predicted classes. In the created
 `accuracy()` function, we provide a vector with reference classes and a
 vector with predicted classes.
 
@@ -243,11 +244,9 @@ accuracy(test$class, pred)
 We achieved an accuracy of over 90%, which is a very good result. Next, we
 can examine the classification results in detail using a confusion matrix.
 This is a tabular summary showing which classes are misclassified by the model.
-The upper triangle in the table shows the False Positive (type I error)
-classifications, while the lower triangle shows the False Negative (type II error)
-classifications. Ideally, most values should be on the diagonal of the table,
-because they indicate correct classifications. This table can be created using
-the `table()` function.
+Ideally, most values should be on the diagonal of the table, because they
+indicate correct classifications. Any values outside of the diagonal represent
+misclassifications. This table can be created using the `table()` function.
 
 ```{r}
 # confusion matrix
@@ -265,11 +264,11 @@ we can understand the classification rules.
 prp(mdl_dt)
 ```
 
-From the figure above, we can see that two conditions are necessary for the
-model to classify water:
+From the figure above, we can see that two conditions are used by the model
+to classify an observation as water:
 
 1. Values in the SWIR2 band are less than 0.073.
-2. Values in the NIR band are less than 0.14.
+2. Values in the NIR band are less than ~0.14.
 
 Let's plot these two conditions as dashed lines on a scatter plot of the
 original data.
@@ -336,6 +335,12 @@ the size of the moving window (`w` argument), and specifying a function
 water_mask = focal(water_mask, w = 3, fun = "modal", expand = TRUE)
 ```
 
+::: {.callout-note appearance="simple"}
+The size of the moving window involves a trade-off. A larger window reduces
+salt-and-pepper noise more effectively, but it can cause small and linear
+flooded features (such as narrow river channels) to disappear.
+:::
+
 Let's compare the water extent predicted by the model with a false color
 composition (SWIR2, NIR and red bands).
 
@@ -345,8 +350,8 @@ composition (SWIR2, NIR and red bands).
 #|   - "Prediction"
 #|   - "False color composition"
 
-colors = c("white", "blue")
-plot(water_mask, col = colors, legend = FALSE, axes = FALSE, mar = 0)
+mask_colors = c("white", "blue")
+plot(water_mask, col = mask_colors, legend = FALSE, axes = FALSE, mar = 0)
 
 plotRGB(r_post, r = 6, g = 4, b = 3, stretch = "lin")
 ```
@@ -362,6 +367,6 @@ writeRaster(water_mask, "water_mask_ml.tif", datatype = "INT1U")
 
 # Exercise
 
-1. Train and test an support vector machine (SVM) model from the e1071 package
+1. Train and test a support vector machine (SVM) model from the `e1071` package
 (see `?svm`). Present the classification result on a map.
 
