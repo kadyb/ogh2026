@@ -2,6 +2,17 @@
 
 This repository contains materials for the [OpenGeoHub Summer School 2026: "Data Science for Earth Observation"](https://opengeohub.org/2026/01/29/earth-observation-summer-school-2026/).
 
+# Introduction
+
+Learn how to process and analyze satellite data in R through two beginner-friendly remote sensing courses.
+In the first course, you will detect floods in Sentinel-2 imagery using spectral indices (Part I) and
+machine learning techniques (Part II). In the second course, you will use Landsat thermal infrared data
+to investigate differences in land surface temperature across land-cover classes.
+
+Both courses emphasize practical, hands-on learning. By the end, you will be able to work with satellite
+imagery using modern tools and document your workflows in reproducible notebooks that support open and
+transparent science.
+
 # Requirements
 
 You need to install [R](https://cloud.r-project.org/), [RStudio](https://posit.co/download/rstudio-desktop/) (preferably), and the required packages as follows:
