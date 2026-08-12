@@ -1,0 +1,431 @@
+---
+title: "Analysis of land surface temperature based on thermal satellite data"
+author: "Krzysztof Dyba"
+format:
+  html:
+    toc: true
+    toc-title: " "
+    embed-resources: true
+    code-links:
+      - text: Repository
+        icon: github
+        href: https://github.com/kadyb/ogh2026
+---
+
+```{r}
+#| message: false
+
+library("terra") # 1.9.34
+```
+
+```{r}
+# randomness seed
+# for reproducibility of results
+set.seed(1) 
+```
+
+# Introduction
+
+In addition to standard optical bands, the [Landsat](https://science.nasa.gov/mission/landsat/)
+satellite also has two thermal infrared bands that measure thermal radiation
+(10.60 - 11.19 µm and 11.50 - 12.51 µm). The original thermal data are acquired
+at a resolution of 100 m and upsampled to 30 m. Landsat data can be searched
+for and downloaded for free from the [Earth Explorer](https://earthexplorer.usgs.gov/)
+website.
+
+[ESA WorldCover](https://esa-worldcover.org) is a global land cover classification
+based on Sentinel-1 and Sentinel-2 data at a resolution of 10 m. The classification
+was performed for 2020 and 2021, for which 11 classes were defined. The data can
+be downloaded for free from, among others, the [WorldCover viewer](https://viewer.esa-worldcover.org/worldcover).
+
+The purpose of this analysis is to assess the surface temperature of various
+land cover classes. The study area covers Istanbul. The Landsat scene was
+acquired on July 23, 2025 at 8:45 am. According to [Weather Underground](https://www.wunderground.com/),
+the temperature at that time was about 32°C.
+
+::: {.callout-note appearance="simple"}
+Air temperature is not directly comparable with satellite-derived land surface
+temperature. A sunlit roof, road, or bare field can have a much higher surface
+temperature than the surrounding air.
+:::
+
+# Analysis
+
+## Data Preparation
+
+### Satellite Data
+
+```{r}
+# read surface reflectance bands (B2-B5)
+landsat = rast("data/landsat/Landsat.tif", lyrs = 1:4)
+```
+
+Optionally, we can assign new names to the default names of raster bands (layers)
+using the `names()` function. 
+
+```{r}
+# assign names to the bands
+# names(landsat) = c("blue", "green", "red", "nir")
+```
+
+```{r}
+# read thermal band (B10)
+thermal = rast("data/landsat/Landsat.tif", lyrs = 5)
+```
+
+The downloaded data comes from Landsat's Collection 2 Level 2. Level 2 means
+that the data has been atmospherically corrected and represents the estimated
+surface reflectance and surface temperature. Please note that only one thermal
+band (B10) is available in Level 2.
+
+The data is stored as integers, so we need to convert it to floating-point
+numbers using the appropriate formula. We must multiply the recorded values
+by a scale factor and add an offset:
+
+- For surface reflectance, the scale factor is $0.0000275$ and the offset is
+$-0.2$.
+- For surface temperature (B10 band), the scale factor is $0.00341802$ and the
+offset is $149$. The converted values will be in Kelvin (K).
+
+Let's scale the values of B2–B5 bands (`landsat` object) using these coefficients.
+
+```{r}
+# scale reflectance values
+landsat = landsat * 0.0000275 - 0.2
+```
+
+After scaling, we need to correct the values that fall outside the standard
+reflectance range of 0 to 1. We can use the `clamp()` function for this and
+define minimum and maximum values. With `values = TRUE`, values below or
+above the specified limits are replaced by the corresponding limit.
+
+```{r}
+# overwrite values outside the range
+landsat = clamp(landsat, lower = 0, upper = 1, values = TRUE)
+```
+
+We can create a visualization consisting of three bands -- red, green, and blue.
+We should also use the `stretch = "lin"` argument to increase the image's
+contrast.
+
+```{r}
+# RGB composition
+plotRGB(landsat, r = 3, g = 2, b = 1, stretch = "lin")
+```
+
+Now, let's apply scaling to the thermal data (keep in mind that the coefficients
+have different values).
+
+```{r}
+# scale temperature values to Kelvin
+thermal = thermal * 0.00341802 + 149
+```
+
+The result is expressed in Kelvin. For convenience, let's convert it to Celsius.
+
+```{r}
+# scale temperature to Celsius
+thermal = thermal - 273.15
+```
+
+Let's see what the spatial variation in surface temperature looks like on the
+map. For this visualization, we will use the `Plasma` color palette, which can
+be generated using the `hcl.colors()` function.
+
+```{r}
+plasma_colors = hcl.colors(n = 40, palette = "Plasma")
+plot(thermal, col = plasma_colors, main = "Surface temperature [°C]")
+```
+
+### Land Cover
+
+```{r}
+# read landcover raster
+landcover = rast("data/landsat/ESA_WorldCover.tif")
+```
+
+```{r}
+# read csv file with labels
+df = read.csv("data/landsat/labels.csv")
+```
+
+After loading the data frame, we can assign appropriate labels to the raster
+values. This is done using the `levels()` function, which requires the data
+frame containing the IDs and labels.
+
+```{r}
+# assign labels to IDs
+levels(landcover) = df
+```
+
+We can see that some classes do not appear at all in our area of interest.
+To remove such classes, use the `droplevels()` function.
+
+```{r}
+# remove unnecessary classes
+landcover = droplevels(landcover)
+```
+
+Both datasets have the same spatial extents (bounding boxes). However, in
+the case of the satellite data, we can notice that values are missing in
+the southern part of the scene (they were not recorded in that area). We
+can transfer the `NA` mask from the satellite image to a land cover raster
+using the `mask()` function.
+
+```{r}
+# copy the NA values from the satellite data to the landcover
+landcover = mask(landcover, thermal)
+```
+
+```{r}
+mar = c(0, 1.5, 0, 7.2)
+plot(landcover, main = "Land cover", mar = mar)
+```
+
+## Thresholding
+
+Using a simple threshold, let's identify the areas with the highest surface
+temperatures. Let's consider the 80th percentile to be the threshold value.
+To calculate this quantile, we must use the `global()` function and set the
+following arguments: `fun = quantile` (without quotes), `probs = 0.80`,
+and `na.rm = TRUE`. The result will be a data frame, which we can convert
+to a vector using the `unlist()` function.
+
+```{r}
+# calculate the 80th percentile
+q80 = global(thermal, fun = quantile, probs = 0.80, na.rm = TRUE)
+
+# convert the data frame to a vector
+q80 = unlist(q80, use.names = FALSE)
+q80
+```
+
+```{r}
+# find the warmest areas based on the percentile
+high_temp = thermal > q80
+```
+
+As a result, we obtained a binary mask consisting of two values: 0 (FALSE)
+if the condition was not met, and 1 (TRUE) if the condition was met.
+To overlay this mask on the map, we need to replace the values of 0 with
+`NA` to make those areas transparent. Otherwise, they will be obscured.
+
+```{r}
+# replace 0 with NA
+high_temp[high_temp == 0] = NA
+```
+
+```{r}
+mar = c(0, 0, 2, 0)
+plotRGB(landsat, r = 3, g = 2, b = 1, stretch = "lin", mar = mar,
+        main = "Surface temperature over 50°C")
+plot(high_temp, col = "brown", legend = FALSE, add = TRUE)
+```
+
+The highest surface temperatures are recorded primarily in built-up areas and
+on croplands (mainly bare fields without vegetation).
+
+## Data Sampling
+
+Let's draw a class-balanced sample from the land cover raster. Our sampling
+design assumes that each class should occur as frequently as the others. To
+achieve this, we must use stratified sampling. The `spatSample()` function is
+used for sampling and supports various sampling methods. For stratified sampling,
+we must set the `method` argument to `stratified`. The `size` argument specifies
+how many observations will be returned for each class. Therefore, setting its
+value to 1,000 will result in a total of 8,000 points. In addition, we specify
+that a point layer will be returned (`as.points = TRUE` argument).
+
+```{r}
+# stratified sampling
+points = spatSample(landcover, size = 1000, method = "stratified",
+                    as.points = TRUE, values = FALSE)
+```
+
+Now that we have the points, we can retrieve values from the rasters using the
+`extract()` function. We use `bind = TRUE` to append the extracted values to
+this vector layer.
+
+```{r}
+# extract raster values by points
+points = extract(landcover, points, bind = TRUE)
+points = extract(thermal, points, bind = TRUE)
+```
+
+## Data Aggregation
+
+At this point, we have a vector layer with two attributes -- land cover class
+and surface temperature. We can then calculate descriptive statistics for each
+class using the `aggregate()` function. For instance, let's calculate the mean
+value.
+
+```{r}
+# average temperature for each class
+agg = aggregate(B10 ~ label, data = points, FUN = "mean")
+```
+
+We can sort the results in descending order using the `order()` function on
+the `B10` column (for descending order, it is easiest to place a minus sign
+before the column name). Next, we can round the values to one decimal place
+using the `round()` function and the `digits = 1` argument. We can also
+modify the column names using the `colnames()` function.
+
+```{r}
+# descending sort
+agg = agg[order(-agg$B10), ]
+
+# round values
+agg$B10 = round(agg$B10, digits = 1)
+
+# rename columns
+colnames(agg) = c("Class", "Value")
+```
+
+```{r}
+#| echo: false
+
+knitr::kable(agg, caption = "Average surface temperature [°C]", align = "c",
+             row.names = FALSE)
+```
+
+## Comparing Groups
+
+Naturally, the question arises as to whether the surface temperatures for these
+classes actually differ. We can verify this in two ways by using:
+
+- Visual data exploration, e.g., a box plot, which is used to present position
+statistics, or a histogram, which is used to analyze the shape of the distribution.
+- Statistical tests, which help determine whether the observed patterns are the
+result of a real effect or could be due to chance.
+
+Every statistical test is based on a logical process called hypothesis testing,
+which generally works as follows:
+
+1. Formulate hypotheses:
+    - Null hypothesis ($H_0$) -- assumes no effect or no difference exists.
+    - Alternative hypothesis ($H_1$) -- assumes there is an effect or difference.
+2. Calculate a test statistic based on the sample data, which produces a
+p-value (probability value). The p-value (a number between 0 and 1) indicates
+how surprising the data are if we did not expect to find anything in the data
+that deviates from the null hypothesis (no effect). A small p-value means the
+observed result would be very unlikely under the null hypothesis, which gives
+reason to doubt the null hypothesis.
+3. Compare the p-value with the significance level (alpha; $\alpha$).
+We must choose a threshold value ($\alpha$) that will be used to reject the
+null hypothesis ($H_0$). It is generally accepted that the threshold value
+is 0.05 or 0.01. Then:
+    - p-value $\leq$ $\alpha$ -- we reject the null hypothesis and conclude that
+  the effect is statistically significant.
+    - p-value > $\alpha$ -- we cannot reject the null hypothesis.
+
+Statistical tests are divided into two types: parametric tests and nonparametric
+tests. Parametric tests are based on strict assumptions about the shape and
+distribution of the population from which the data are drawn, whereas
+nonparametric tests are based on very few assumptions or none at all.
+
+Assumptions of parametric tests:
+
+- Data is normally distributed (bell-shaped curve with few/no extreme outliers).
+- Variance is roughly equal across groups (spread of values is similar between
+  groups).
+- Sample sizes are reasonably large (n $\geq$ 30).
+
+### Visual Data Exploration
+
+The `boxplot()` function will generate box plots taking classes into account,
+while the `hist()` function will generate histograms. To create the histograms,
+we need to use a loop and select the appropriate land cover class in each
+iteration. It is also recommended to set the same range of values on the
+X-axis so that different cases can be compared more easily.
+
+```{r}
+# boxplots
+par(mar = c(5, 9, 1, 1))
+boxplot(B10 ~ label, data = points, horizontal = TRUE, las = 1,
+        xlab = "Surface temperature [°C]", ylab = NULL)
+```
+
+```{r}
+# histograms on a single panel
+par(mfrow = c(3, 3))
+for (i in levels(points$label)) {
+  idx = points$label == i
+  title = paste0(i, " [°C]")
+  hist(points$B10[idx], xlab = NULL, main = title, xlim = c(25, 60))
+}
+```
+
+What conclusions can be drawn from the figures above?
+
+1. Some land cover classes have many outliers.
+2. The differing widths of the boxes show that the classes have different
+variances.
+3. The histograms are not symmetric (some have tails). Additionally, the
+medians are not centered within the boxes, and the whiskers are unequal,
+indicating skewed distributions. Therefore, we can conclude that the condition
+of normality is not met.
+
+We can also confirm our deductions using statistical tests. For example,
+the Shapiro-Wilk test (`shapiro.test()`) can be used to check for a normal
+distribution, and Levene's test (`car::leveneTest()`) can be used to check
+for homogeneity of variances.
+
+### Groups Testing
+
+We assume that the requirements for parametric tests are not met, so we must
+use a nonparametric test to compare the groups. In our case, we can use the
+Kruskal-Wallis test. Our hypotheses are:
+
+- Null Hypothesis ($H_0$): No difference between groups.
+- Alternative Hypothesis ($H_1$): A real difference exists.
+
+We set the significance level ($\alpha$) to 0.01. We will use the `kruskal.test()`
+function to calculate this test.
+
+```{r}
+# Kruskal-Wallis test
+kruskal.test(B10 ~ label, data = points)
+```
+
+The p-value is very low (below the selected threshold), so we can reject the
+null hypothesis ($H_0$) and accept the alternative hypothesis ($H_1$) that
+there are significant differences between the classes. However, we do not
+know between which groups this difference is significant.
+
+Therefore, in the next step, we must perform a post-hoc test to compare the
+groups in pairs and identify the exact differences (again, using a nonparametric
+version). For instance, we can use pairwise Wilcoxon tests implemented in the
+`pairwise.wilcox.test()` function.
+
+```{r}
+# pairwise Wilcoxon tests
+result = pairwise.wilcox.test(points$B10, points$label)
+```
+
+```{r}
+#| echo: false
+
+format_pvalue = function(x) {
+  if (is.na(x)) return("-")
+  if (x < 0.001) return("<0.001")
+  return(as.character(round(x, 3)))
+}
+
+result$p.value = apply(result$p.value, MARGIN = c(1, 2), FUN = format_pvalue)
+knitr::kable(result$p.value, caption = "Pairwise Wilcoxon Test", align = "c")
+```
+
+Similarly, if the p-value is less than the specified significance level, we
+reject the null hypothesis and accept the alternative hypothesis, which states
+that the difference is significant.
+
+# Exercise
+
+1. Is there a relationship between surface temperature and the normalized
+difference vegetation index (NDVI)? Examine this relationship using a scatter
+plot. To calculate NDVI, use the following formula:
+
+$$
+\text{NDVI} = \frac{\text{NIR} - \text{RED}}{\text{NIR} + \text{RED}}
+$$
+
