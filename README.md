@@ -19,7 +19,7 @@ You can download interactive notebooks (.qmd) and static documents (.html) from 
 1. Flood detection using satellite data:
    - [Part 1: Introduction](https://kadyb.github.io/ogh2026/01_flood_detection_intro.html)
    - [Part 2: Machine learning](https://kadyb.github.io/ogh2026/02_flood_detection_ml.html)
-2. Analysis of land surface temperature based on thermal satellite data
+2. [Analysis of land surface temperature based on thermal satellite data](https://kadyb.github.io/ogh2026/03_land_surface_temperature.html)
 
 # Contact
 
