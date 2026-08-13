@@ -370,7 +370,7 @@ the Shapiro-Wilk test (`shapiro.test()`) can be used to check for a normal
 distribution, and Levene's test (`car::leveneTest()`) can be used to check
 for homogeneity of variances.
 
-### Groups Testing
+### Statistical Testing
 
 We assume that the requirements for parametric tests are not met, so we must
 use a nonparametric test to compare the groups. In our case, we can use the
