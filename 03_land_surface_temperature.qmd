@@ -53,7 +53,47 @@ temperature than the surrounding air.
 
 ## Data Preparation
 
+The necessary data can be found in the [Zenodo repository](https://zenodo.org/records/21922843).
+We can access this data in two ways:
+
+1. We can download them directly to the disk using the `download.file()`
+function. In this case, it is also a good idea to increase the default timeout.
+The data needs to be extracted from the archive using the `unzip()` function
+after downloading. Let's choose this method as preferred.
+
+```{r}
+if (!dir.exists("data/landsat")) {
+  
+  # increase connection timeout
+  options(timeout = 600)
+  url = "https://zenodo.org/api/records/21922843/files-archive"
+  
+  # download archive from URL
+  download.file(url, "data/landsat.zip", mode = "wb")
+  
+  # unzip archive
+  unzip("data/landsat.zip", exdir = "data/landsat")
+
+}
+```
+
+2. Alternatively, use [GDAL Virtual File Systems](https://gdal.org/en/stable/user/virtual_file_systems.html)
+to access them remotely. This requires adding the prefix `/vsicurl/` to both
+tif files. For example:
+
+```{r}
+#| eval: false
+
+url_landcover = "https://zenodo.org/records/21922843/files/ESA_WorldCover.tif?download=1"
+url_landcover = paste0("/vsicurl/", url_landcover)
+landcover = rast(url_landcover)
+```
+
 ### Satellite Data
+
+Let's load the four bands representing surface reflectance (B2–B5) using the
+`rast()` function and defining the indices of these bands in the `lyrs`
+argument.
 
 ```{r}
 # read surface reflectance bands (B2-B5)
@@ -67,6 +107,8 @@ using the `names()` function.
 # assign names to the bands
 # names(landsat) = c("blue", "green", "red", "nir")
 ```
+
+Let's also load the last band representing surface temperature (B10).
 
 ```{r}
 # read thermal band (B10)
@@ -349,9 +391,12 @@ boxplot(B10 ~ label, data = points, horizontal = TRUE, las = 1,
 # histograms on a single panel
 par(mfrow = c(3, 3))
 for (i in levels(points$label)) {
+  
+  # select appropriate class
   idx = points$label == i
   title = paste0(i, " [°C]")
   hist(points$B10[idx], xlab = NULL, main = title, xlim = c(25, 60))
+  
 }
 ```
 
