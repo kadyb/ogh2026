@@ -32,6 +32,8 @@ You can download interactive notebooks (.qmd) and static documents (.html) from 
    - [Part 2: Machine learning](https://kadyb.github.io/ogh2026/02_flood_detection_ml.html)
 2. [Analysis of land surface temperature based on thermal satellite data](https://kadyb.github.io/ogh2026/03_land_surface_temperature.html)
 
+The dataset required for the second workshop is available in the [Zenodo repository](https://zenodo.org/records/21922843).
+
 # Contact
 
 If you have any questions or need help, please let me know at [Mattermost](https://mattermost.opengeohub.org/).
