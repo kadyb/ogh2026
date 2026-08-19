@@ -1,4 +1,4 @@
-# OpenGeoHub Summmer School 2025
+# OpenGeoHub Summmer School 2026
 
 This repository contains materials for the [OpenGeoHub Summer School 2026: "Data Science for Earth Observation"](https://opengeohub.org/2026/01/29/earth-observation-summer-school-2026/).
 
